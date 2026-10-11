@@ -4,12 +4,13 @@ const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>
 const sessions = {};
 let state = null, travelToken = 0, toastTimer, dialogueTimer;
 const reducedMotion = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-const typeNames={choice:'对话 / 判断',spell:'单词拼写',match:'标签配对',order:'句卡整理',multi:'物品选择',listen:'语音留言'};
+const typeNames={choice:'对话 / 判断',spell:'单词拼写',match:'标签配对',order:'句卡整理',multi:'物品选择',listen:'语音留言',form:'留言修复 / 自己变形',dispatch:'人员调度 / 读懂消息'};
+const kanaKeys=Array.from('あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをんがぎぐげござじずぜぞだぢづでどばびぶべぼぱぴぷぺぽぁぃぅぇぉゃゅょっー');
 function toast(s){$('#toast').textContent=s;$('#toast').classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('#toast').classList.remove('show'),3600);}
 function campaign(){return CAMPAIGNS[state.campaign];}
 function quest(){return campaign().quests[state.quest];}
 function task(){return quest().tasks[state.steps[state.quest]];}
-function record(q=task()){return state.records[q.id]??(state.records[q.id]={attempts:0,wrong:0,solved:false,hint:false,transcript:false,order:[],selected:[],pairs:[],pairLeft:null,spell:'',message:''});}
+function record(q=task()){return state.records[q.id]??(state.records[q.id]={attempts:0,wrong:0,solved:false,hint:false,transcript:false,order:[],selected:[],pairs:[],pairLeft:null,spell:'',fields:(q.fields||[]).map(()=>''),activeField:0,fieldErrors:[],allocations:(q.destinations||[]).map(()=>0),keyboard:false,message:''});}
 function done(){return state.steps.filter(n=>n===3).length;}
 function solvedCount(){return Object.values(state.records).filter(r=>r.solved).length;}
 function canVisit(i){return i<5 || state.steps.slice(0,5).every(n=>n===3);}
@@ -65,6 +66,17 @@ function renderWorkbench(){
   if(t.type==='multi')html+='<div class="work-actions"><button class="primary" id="submitMulti">确认托盘</button></div>';
  }else if(t.type==='spell'){
   html+=`<div class="spelling-display"><div class="word-card">${esc(t.word)}</div><span class="micro">在背面写假名读音<br>注意长音、促音和拗音</span></div><label class="sr-only" for="spellInput">${esc(t.word)}的平假名读音</label><input id="spellInput" class="answer-input" lang="ja" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="输入平假名读音" value="${esc(r.spell)}" ${r.solved?'disabled':''}><div class="keyboard">${t.keys.map(k=>`<button data-kana="${esc(k)}" ${r.solved?'disabled':''}>${esc(k)}</button>`).join('')}<button id="backspace" ${r.solved?'disabled':''} aria-label="删除末尾假名">⌫</button></div><div class="work-actions"><button class="primary" id="submitSpell" ${r.solved?'disabled':''}>填写名签 ✓</button></div>`;
+ }else if(t.type==='form'){
+  html+=`<div class="mission-document"><div class="document-heading"><span>✎</span><b>${esc(t.document||'校园任务留言')}</b><small>填写后发送</small></div><div class="form-fields">${t.fields.map((f,i)=>`<div class="field-card ${r.fieldErrors.includes(i)?'needs-fix':''} ${r.activeField===i?'active-field':''}"><label for="field-${i}"><span class="field-number">${i+1}</span>${esc(f.label)}</label><div class="sentence-line jp"><span>${esc(f.before||'')}</span><input id="field-${i}" data-field="${i}" class="answer-input" lang="ja" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="80" placeholder="填写这里" aria-invalid="${r.fieldErrors.includes(i)}" value="${esc(r.fields[i])}" ${r.solved?'disabled':''}><span>${esc(f.after||'')}</span></div>${r.fieldErrors.includes(i)?'<small class="field-warning">检查这一空的词类、时间、肯否或接续。</small>':''}</div>`).join('')}</div></div>`;
+  if(!r.solved){
+   html+=`<div class="input-tools"><span id="inputTarget">当前填写：${esc(t.fields[r.activeField].label)}</span><button id="toggleKana" class="text-button">${r.keyboard?'收起':'展开'}假名键盘</button></div>`;
+   if(t.bank)html+=`<div class="answer-bank" aria-label="可重复使用的标签">${t.bank.map(v=>`<button data-bank="${esc(v)}" lang="ja">${esc(v)}</button>`).join('')}</div>`;
+   if(r.keyboard)html+=`<div class="kana-dock" aria-label="假名输入键盘">${kanaKeys.map(v=>`<button data-form-kana="${esc(v)}">${esc(v)}</button>`).join('')}<button id="formBackspace" aria-label="删除当前空末尾字符">⌫</button><button id="formClear">清空</button></div>`;
+  }
+  html+=`<div class="work-actions"><button id="submitForm" class="primary" ${r.solved?'disabled':''}>发送这份留言 ↗</button></div>`;
+ }else if(t.type==='dispatch'){
+  const remaining=t.total-r.allocations.reduce((a,b)=>a+b,0);
+  html+=`<div class="dispatch-board"><div class="dispatch-heading"><b>志愿者调度台</b><span>待命 <strong>${remaining}</strong> / ${t.total}</span></div><div class="standby-people" aria-label="待命志愿者">${Array.from({length:t.total},(_,i)=>`<span class="volunteer ${i>=remaining?'assigned':''}"><span class="avatar p${i%3}"></span><small>${i<remaining?'待命':'已派出'}</small></span>`).join('')}</div><div class="dispatch-destinations">${t.destinations.map((v,i)=>`<section class="dispatch-site"><h4 lang="ja">${esc(v)}</h4><p>追加人员 <b>${r.allocations[i]}</b> 人</p><div class="assigned-people">${Array.from({length:r.allocations[i]},(_,n)=>`<button class="avatar p${(i+n)%3}" data-dispatch="${i}" data-change="-1" aria-label="撤回${esc(v)}一名志愿者" ${r.solved?'disabled':''}></button>`).join('')||'<span class="micro">等待派出</span>'}</div><div class="dispatch-controls"><button data-dispatch="${i}" data-change="-1" aria-label="减少${esc(v)}一人" ${r.solved||!r.allocations[i]?'disabled':''}>−</button><button data-dispatch="${i}" data-change="1" aria-label="派往${esc(v)}一人" ${r.solved||!remaining?'disabled':''}>＋</button></div></section>`).join('')}</div><p class="micro">上方手机消息是两处原有的人数；此处只调配新增人员。</p></div><div class="work-actions"><button id="resetDispatch" ${r.solved?'disabled':''}>重新调配</button><button id="submitDispatch" class="primary" ${r.solved?'disabled':''}>确认调度 →</button></div>`;
  }else if(t.type==='order'){
   html+=`<div class="tile-zone" aria-label="已排列的句子">${r.order.map((i,n)=>`<button class="tile" data-remove="${n}" ${r.solved?'disabled':''}>${esc(t.tiles[i])}</button>`).join('')}</div><div class="tile-bank" aria-label="待选词卡">${t.tiles.map((v,i)=>`<button class="tile" data-tile="${i}" ${r.order.includes(i)||r.solved?'disabled':''}>${esc(v)}</button>`).join('')}</div><div class="work-actions"><button id="clearTiles" ${r.solved?'disabled':''}>重新整理</button><button class="primary" id="submitOrder" ${r.solved?'disabled':''}>用这句话回应 ↗</button></div>`;
  }else if(t.type==='match'){
@@ -88,7 +100,26 @@ function renderWorkbench(){
  if($('#clearTiles')){$('#clearTiles').onclick=()=>{r.order=[];renderWorkbench();};$('#submitOrder').onclick=()=>submitAnswer(r.order.map(i=>t.tiles[i]));}
  $('#workbench').querySelectorAll('[data-left]').forEach(b=>b.onclick=()=>{r.pairLeft=Number(b.dataset.left);renderWorkbench();});
  $('#workbench').querySelectorAll('[data-right]').forEach(b=>b.onclick=()=>{if(r.pairLeft===null){toast('先选左侧的卡片，再选择右侧配对。');return;}pairCards(r.pairLeft,Number(b.dataset.right));});
- $('#hintBtn').onclick=()=>{r.hint=true;r.message=t.explain;renderFeedback();};
+ if(t.type==='form'){
+  $('#workbench').querySelectorAll('[data-field]').forEach(el=>{
+   el.oninput=()=>{r.fields[Number(el.dataset.field)]=el.value;};
+   el.onfocus=()=>{r.activeField=Number(el.dataset.field);$('#workbench').querySelectorAll('.field-card').forEach((c,i)=>c.classList.toggle('active-field',i===r.activeField));if($('#inputTarget'))$('#inputTarget').textContent='当前填写：'+t.fields[r.activeField].label;};
+   el.onkeydown=e=>{if(e.key==='Enter'&&!e.isComposing){e.preventDefault();if(r.activeField<t.fields.length-1)$('#field-'+(r.activeField+1)).focus();else submitAnswer([...r.fields]);}};
+  });
+  const insert=(v,replace=false)=>{if(r.solved)return;const el=$('#field-'+r.activeField);const start=el.selectionStart??el.value.length,end=el.selectionEnd??start;const next=replace?v:el.value.slice(0,start)+v+el.value.slice(end);r.fields[r.activeField]=next.slice(0,80);el.value=r.fields[r.activeField];el.focus();const cursor=replace?next.length:start+v.length;el.setSelectionRange(cursor,cursor);};
+  $('#workbench').querySelectorAll('[data-bank]').forEach(b=>{b.onpointerdown=e=>e.preventDefault();b.onclick=()=>insert(b.dataset.bank,true);});
+  $('#workbench').querySelectorAll('[data-form-kana]').forEach(b=>{b.onpointerdown=e=>e.preventDefault();b.onclick=()=>insert(b.dataset.formKana);});
+  if($('#toggleKana'))$('#toggleKana').onclick=()=>{r.keyboard=!r.keyboard;renderWorkbench();};
+  if($('#formBackspace'))$('#formBackspace').onclick=()=>{const el=$('#field-'+r.activeField);const a=el.selectionStart??el.value.length,b=el.selectionEnd??a;const next=el.value.slice(0,a===b?Math.max(0,a-1):a)+el.value.slice(b);insert(next,true);};
+  if($('#formClear'))$('#formClear').onclick=()=>insert('',true);
+  $('#submitForm').onclick=()=>submitAnswer([...r.fields]);
+ }
+ if(t.type==='dispatch'){
+  $('#workbench').querySelectorAll('[data-dispatch]').forEach(b=>b.onclick=()=>{if(r.solved)return;const i=Number(b.dataset.dispatch),change=Number(b.dataset.change);if(change<0&&r.allocations[i]>0)r.allocations[i]--;else if(change>0&&r.allocations.reduce((a,v)=>a+v,0)<t.total)r.allocations[i]++;renderWorkbench();});
+  $('#resetDispatch').onclick=()=>{r.allocations=t.destinations.map(()=>0);renderWorkbench();};
+  $('#submitDispatch').onclick=()=>submitAnswer([...r.allocations]);
+ }
+ $('#hintBtn').onclick=()=>{r.hint=true;r.message=t.hint||t.explain;renderFeedback();};
 }
 function normal(s){return s.normalize('NFKC').replace(/\s/g,'').trim();}
 function submitAnswer(answer){
@@ -99,6 +130,15 @@ function submitAnswer(answer){
  else if(t.type==='spell'){if(typeof answer!=='string'||answer.length>100)throw Error('请输入简短的假名读音。');if(!normal(answer)){toast('请先填写读音。');return {ok:false,reason:'empty_answer'};}r.spell=answer;correct=normal(answer)===t.answer;}
  else if(t.type==='order'){if(!Array.isArray(answer)||answer.some(v=>typeof v!=='string')||answer.length>t.tiles.length||answer.some(v=>!t.tiles.includes(v)))throw Error('词卡内容无效。');correct=JSON.stringify(answer)===JSON.stringify(t.answer);}
  else if(t.type==='multi'){if(!Array.isArray(answer)||answer.some(v=>!Number.isInteger(v)||v<0||v>=t.options.length)||new Set(answer).size!==answer.length)throw Error('物品编号无效。');r.selected=[...answer];correct=JSON.stringify([...answer].sort())===JSON.stringify([...t.answer].sort());}
+ else if(t.type==='form'){
+  if(!Array.isArray(answer)||answer.length!==t.fields.length||answer.some(v=>typeof v!=='string'||v.length>80))throw Error('请按输入框填写简短日语。');
+  r.fields=[...answer];if(answer.some(v=>!normal(v))){toast('请先填写每一空，再发送留言。');return {ok:false,reason:'empty_answer'};}
+  r.fieldErrors=t.fields.flatMap((f,i)=>f.answers.some(v=>normal(v)===normal(answer[i]))?[]:[i]);correct=r.fieldErrors.length===0;
+ }
+ else if(t.type==='dispatch'){
+  if(!Array.isArray(answer)||answer.length!==t.destinations.length||answer.some(v=>!Number.isInteger(v)||v<0)||answer.reduce((a,v)=>a+v,0)>t.total)throw Error('请使用可用人员完成调度。');
+  r.allocations=[...answer];correct=JSON.stringify(answer)===JSON.stringify(t.answer);
+ }
  else throw Error('配对任务请依次连接卡片。');
  return grade(correct);
 }
@@ -109,7 +149,7 @@ function pairCards(left,right){
  if(left===right){r.pairs.push(left);r.pairLeft=null;r.message='这一组归位了。继续连接剩下的卡片。';if(r.pairs.length===t.pairs.length)return grade(true);renderWorkbench();renderFeedback();return {ok:true,matched:r.pairs.length};}
  r.pairLeft=null;return grade(false);
 }
-function grade(correct){const r=record();r.attempts++;if(correct){r.solved=true;r.message=task().explain;}else{r.wrong++;r.message='这一步还需要调整。请再核对场景信息、助词或假名大小；需要帮助时可点“知识提示”。';}renderWorkbench();renderFeedback();renderSidebar();if(correct)successMotion();return {ok:true,correct,solved:solvedCount(),attempts:r.attempts};}
+function grade(correct){const r=record();r.attempts++;if(correct){r.solved=true;r.message=task().explain;}else{r.wrong++;r.message=task().type==='form'?`第 ${r.fieldErrors.map(i=>i+1).join('、')} 空还需调整。已保留其他填写内容；检查词类、时间、肯否和接续。`:task().type==='dispatch'?'人数安排还需调整。请重新读手机消息，区分“只有两人”和“一个人也没有”。':'这一步还需要调整。请再核对人物、时间、肯否或假名大小；需要帮助时可点“知识提示”。';}renderWorkbench();renderFeedback();renderSidebar();if(correct)successMotion();return {ok:true,correct,solved:solvedCount(),attempts:r.attempts};}
 function renderFeedback(){
  const r=record();$('#feedback').innerHTML=r.message?`<div class="feedback ${r.solved?'correct':''}"><b>${r.solved?'✓ 场景任务完成':r.hint?'知识提示':'再检查一下'}</b>${esc(r.message)}</div>`:'';
  $('#continueRow').innerHTML=r.solved?`<button id="continueBtn" class="primary">${state.steps[state.quest]===2?'收好'+esc(quest().reward):'继续这段对话'} →</button>`:'';
@@ -168,7 +208,7 @@ function speak(text){
  const voice=window.speechSynthesis.getVoices().find(v=>/^ja(?:-|_)/i.test(v.lang));
  if(!voice){toast('此设备尚无可用日语语音，可用文字辅助继续；课堂前请配置日语语音。');return;}
  // Keep kanji on screen; explicitly normalize the exceptional hour reading for TTS.
- cancelSpeech();const spokenText=text.replace(/九時|９時|9時/g,'くじ');const u=new SpeechSynthesisUtterance(spokenText);u.voice=voice;u.lang='ja-JP';u.rate=.83;u.volume=.9;u.onerror=()=>toast('日语语音暂时无法播放，请使用文字辅助。');window.speechSynthesis.speak(u);
+ cancelSpeech();const spokenText=text.replace(/九時|９時|9時/g,'くじ').replace(/１０分|10分/g,'じゅっぷん');const u=new SpeechSynthesisUtterance(spokenText);u.voice=voice;u.lang='ja-JP';u.rate=.83;u.volume=.9;u.onerror=()=>toast('日语语音暂时无法播放，请使用文字辅助。');window.speechSynthesis.speak(u);
 }
 function status(){if(!state)return {view:'welcome',campaigns:['mid','final']};const t=done()<6?task():null;return {campaign:state.campaign,view:state.view,station:state.quest,stationName:PLACES[quest().place].name,completedStations:done(),solvedTasks:solvedCount(),task:t?{id:t.id,type:t.type,title:t.title,solved:state.records[t.id]?.solved??false}:null};}
 document.querySelectorAll('[data-start]').forEach(b=>b.onclick=()=>startAdventure(b.dataset.start));$('#homeBtn').onclick=goHome;$('#mapBtn').onclick=()=>done()===6?renderEnding():renderMap();$('#notebookBtn').onclick=renderNotebook;
@@ -181,7 +221,7 @@ if(document.modelContext?.registerTool){
  const add=(name,description,properties,required,fn,readOnly=false)=>{const schema={type:'object',properties,required,additionalProperties:false};try{Promise.resolve(document.modelContext.registerTool({name,description,inputSchema:schema,annotations:{readOnlyHint:readOnly,untrustedContentHint:false},execute:async input=>{if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).some(k=>!Object.hasOwn(properties,k))||required.some(k=>!Object.hasOwn(input,k)))throw Error('工具参数无效。');return await fn(input);}},{signal:controller.signal})).catch(()=>{});}catch{/* Unsupported hosts retain the complete UI. */}};
  add('start_review_adventure','Start or resume one chapter in the visible game.',{campaign:{type:'string',enum:['mid','final']}},['campaign'],a=>startAdventure(a.campaign));
  add('visit_campus_station','Visit a map station, zero-based 0–5. The finale requires the first five completed.',{station:{type:'integer',minimum:0,maximum:5}},['station'],a=>visit(a.station));
- add('answer_current_challenge','Submit the visible challenge. Choice/listening: zero-based option; spell: kana string; order: ordered string array; multi: option index array.',{answer:{oneOf:[{type:'integer'},{type:'string'},{type:'array',items:{oneOf:[{type:'string'},{type:'integer'}]}}]}},['answer'],a=>submitAnswer(a.answer));
+ add('answer_current_challenge','Submit the visible challenge. Choice/listening: zero-based option; spell: kana string; form: strings in field order; dispatch: additional people per location; order: ordered string array; multi: option index array.',{answer:{oneOf:[{type:'integer'},{type:'string'},{type:'array',items:{oneOf:[{type:'string'},{type:'integer'}]}}]}},['answer'],a=>submitAnswer(a.answer));
  add('match_challenge_cards','Connect one left card and one right card by zero-based pair index, updating the visible board.',{left:{type:'integer'},right:{type:'integer'}},['left','right'],a=>pairCards(a.left,a.right));
  add('continue_review_story','Advance after a correctly completed challenge; never skips unanswered work.',{},[],()=>advance());
  add('read_review_status','Read concise game progress without revealing solutions.',{},[],()=>status(),true);
